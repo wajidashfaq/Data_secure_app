@@ -2,48 +2,37 @@ import streamlit as st
 import hashlib
 import json
 import os
-from cryptography.fernet import Fernet  # ✅ This is used properly below
+from cryptography.fernet import Fernet
 
-# ----------------------- Constants & File Paths -----------------------
+# -------------------- Constants & File Paths --------------------
 
-DATA_FILE = "data.json"
+DATA_FILE = "user_data.json"
 KEY_FILE = "fernet.key"
-MASTER_PASSWORD = "admin123"  # Change for production
 
-# ----------------------- Key Setup -----------------------
+# -------------------- Fernet Setup --------------------
 
-def load_or_create_key():
-    if os.path.exists(KEY_FILE):
-        with open(KEY_FILE, "rb") as file:
-            return file.read()
-    else:
+def get_cipher():
+    if not os.path.exists(KEY_FILE):
         key = Fernet.generate_key()
-        with open(KEY_FILE, "wb") as file:
-            file.write(key)
-        return key
+        with open(KEY_FILE, "wb") as f:
+            f.write(key)
+    else:
+        with open(KEY_FILE, "rb") as f:
+            key = f.read()
+    return Fernet(key)
 
-# Load encryption key and cipher
-key = load_or_create_key()
-cipher = Fernet(key)
+cipher = get_cipher()
 
-# ----------------------- Utility Functions -----------------------
+# -------------------- Utility Functions --------------------
 
-def hash_passkey(passkey):
-    return hashlib.sha256(passkey.encode()).hexdigest()
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
 
 def encrypt_data(text):
     return cipher.encrypt(text.encode()).decode()
 
-def decrypt_data(encrypted_text, passkey, stored_data):
-    hashed = hash_passkey(passkey)
-
-    for key, value in stored_data.items():
-        if key == encrypted_text and value["passkey"] == hashed:
-            st.session_state.failed_attempts = 0
-            return cipher.decrypt(encrypted_text.encode()).decode()
-
-    st.session_state.failed_attempts += 1
-    return None
+def decrypt_data(encrypted_text):
+    return cipher.decrypt(encrypted_text.encode()).decode()
 
 def load_data():
     if os.path.exists(DATA_FILE):
@@ -55,96 +44,98 @@ def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f)
 
-# ----------------------- Session State Init -----------------------
+# -------------------- Session State --------------------
 
-if "stored_data" not in st.session_state:
-    st.session_state.stored_data = load_data()
-
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "username" not in st.session_state:
+    st.session_state.username = ""
 if "failed_attempts" not in st.session_state:
     st.session_state.failed_attempts = 0
 
-if "reauthorized" not in st.session_state:
-    st.session_state.reauthorized = False
+# -------------------- App Pages --------------------
 
-# ----------------------- Streamlit Page Config -----------------------
+st.set_page_config(page_title="Secure Data System", layout="centered")
+menu = ["Register", "Login", "Store Data", "Retrieve Data"]
+choice = st.sidebar.selectbox("🔐 Navigation", menu)
 
-st.set_page_config(page_title="🔐 Secure Data Encryption", layout="centered")
-st.sidebar.title("🔐 Navigation")
-menu = ["Home", "Store Data", "Retrieve Data", "Login"]
-choice = st.sidebar.selectbox("Go to", menu)
+# -------------------- Register Page --------------------
 
-# ----------------------- Pages -----------------------
+if choice == "Register":
+    st.title("📝 Register")
 
-if choice == "Home":
-    st.title("🔒 Secure Data Encryption System (with JSON)")
-    st.markdown("""
-    Welcome to your secure data locker.  
-    - Encrypt and store any sensitive information.  
-    - Use your unique passkey to decrypt it later.  
-    - All data is stored **securely** and **persistently** in a JSON file.
-    """)
+    username = st.text_input("Choose a Username")
+    password = st.text_input("Choose a Password", type="password")
 
-# ----------------------- STORE DATA -----------------------
+    if st.button("Register"):
+        data = load_data()
 
-elif choice == "Store Data":
-    st.header("📂 Store Your Data Securely")
-
-    user_data = st.text_area("Enter the data you want to store:")
-    passkey = st.text_input("Create a passkey to protect this data:", type="password")
-
-    if st.button("Encrypt & Save"):
-        if user_data and passkey:
-            encrypted = encrypt_data(user_data)
-            hashed = hash_passkey(passkey)
-
-            st.session_state.stored_data[encrypted] = {
-                "encrypted_text": encrypted,
-                "passkey": hashed
+        if username in data:
+            st.error("❌ Username already exists. Choose another.")
+        elif username and password:
+            data[username] = {
+                "password": hash_password(password),
+                "entries": []
             }
-
-            save_data(st.session_state.stored_data)
-
-            st.success("✅ Your data was encrypted and saved securely!")
-            st.code(encrypted, language="text")
+            save_data(data)
+            st.success("✅ Registration successful! You can now login.")
         else:
-            st.warning("⚠️ Please provide both data and a passkey.")
+            st.warning("⚠️ Please fill in both fields.")
 
-# ----------------------- RETRIEVE DATA -----------------------
-
-elif choice == "Retrieve Data":
-    st.header("🔍 Retrieve Your Encrypted Data")
-
-    if st.session_state.failed_attempts >= 3 and not st.session_state.reauthorized:
-        st.warning("🔒 Too many failed attempts. Redirecting to Login...")
-        st.switch_page("Login")  # Or: st.experimental_rerun()
-    
-    encrypted_input = st.text_area("Paste your encrypted data:")
-    passkey = st.text_input("Enter your passkey:", type="password")
-
-    if st.button("Decrypt"):
-        if encrypted_input and passkey:
-            result = decrypt_data(encrypted_input, passkey, st.session_state.stored_data)
-
-            if result:
-                st.success("✅ Decryption Successful!")
-                st.code(result, language="text")
-            else:
-                attempts_left = 3 - st.session_state.failed_attempts
-                st.error(f"❌ Incorrect passkey. Attempts left: {attempts_left}")
-        else:
-            st.warning("⚠️ Please enter both encrypted data and your passkey.")
-
-# ----------------------- LOGIN PAGE -----------------------
+# -------------------- Login Page --------------------
 
 elif choice == "Login":
-    st.header("🔑 Reauthorization Required")
+    st.title("🔐 Login")
 
-    login_pass = st.text_input("Enter master password to unlock:", type="password")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
 
     if st.button("Login"):
-        if login_pass == MASTER_PASSWORD:
-            st.session_state.failed_attempts = 0
-            st.session_state.reauthorized = True
-            st.success("✅ Reauthorized! You can now try to retrieve data again.")
+        data = load_data()
+        if username in data and data[username]["password"] == hash_password(password):
+            st.session_state.logged_in = True
+            st.session_state.username = username
+            st.success(f"✅ Welcome, {username}!")
         else:
-            st.error("❌ Incorrect master password.")
+            st.error("❌ Invalid credentials.")
+
+# -------------------- Store Data --------------------
+
+elif choice == "Store Data":
+    st.title("📂 Store Encrypted Data")
+
+    if not st.session_state.logged_in:
+        st.warning("🔒 You must log in first.")
+    else:
+        user_data = st.text_area("Enter the data you want to encrypt and store:")
+
+        if st.button("Encrypt & Store"):
+            if user_data:
+                encrypted = encrypt_data(user_data)
+                data = load_data()
+                data[st.session_state.username]["entries"].append(encrypted)
+                save_data(data)
+                st.success("✅ Data encrypted and stored successfully.")
+                st.code(encrypted, language="text")
+            else:
+                st.warning("⚠️ Please enter some data to store.")
+
+# -------------------- Retrieve Data --------------------
+
+elif choice == "Retrieve Data":
+    st.title("🔍 Retrieve Your Stored Data")
+
+    if not st.session_state.logged_in:
+        st.warning("🔒 You must log in first.")
+    else:
+        data = load_data()
+        entries = data[st.session_state.username]["entries"]
+
+        if entries:
+            selected = st.selectbox("Select encrypted entry:", entries)
+            if st.button("Decrypt"):
+                decrypted = decrypt_data(selected)
+                st.success("✅ Decrypted Data:")
+                st.code(decrypted)
+        else:
+            st.info("ℹ️ No encrypted entries found for your account.")
